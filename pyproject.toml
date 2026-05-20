@@ -1,0 +1,33 @@
+[project]
+name = "egodex-robot"
+version = "0.1.0"
+description = "Retarget the EgoDex egocentric human-hand dataset onto a Mobile ALOHA bimanual parallel-gripper robot and overlay it on the original frame."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# Core deps for the CPU-only stages (dataset load, viz, render, overlay, grasp fallback).
+# NOTE: not installed yet -- this task only scaffolds the project. Run `uv sync` to install.
+dependencies = [
+    "lerobot",            # LeRobotDataset loader for pepijn223/egodex-test
+    "rerun-sdk>=0.29",    # 3D viz + built-in URDF loader for the Mobile ALOHA render
+    "numpy",
+    "opencv-python",      # frame I/O + overlay compositing
+    "huggingface-hub",    # dataset/asset download
+    "typer>=0.12",        # CLI
+    "scikit-learn",       # KMeans(2) contact-point clustering fallback for grasps
+]
+
+# Heavy ML stages (HAMER, SAM-3D-Objects, GraspGen) are intentionally NOT extras here:
+# they each need a GPU + large weights and have mutually conflicting torch/CUDA deps, so
+# they must live in their own environments. See AGENTS.md for setup.
+
+[project.scripts]
+egodex = "egodex_robot.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/egodex_robot"]

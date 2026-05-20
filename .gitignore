@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+uv.lock
+
+# Project artifacts
+outputs/
+weights/
+*.rrd
+
+# Downloaded assets (URDF meshes can be large; keep them out of git)
+assets/urdf/*
+!assets/urdf/.gitkeep
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
