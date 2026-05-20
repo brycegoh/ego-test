@@ -1,41 +1,43 @@
 #!/usr/bin/env bash
-# Fetch the Mobile ALOHA robot description and produce a flat URDF in assets/urdf/.
+# Fetch the Mobile ALOHA URDF + meshes from AgileX's simulation repo into assets/urdf/.
 #
-# Mobile ALOHA is bimanual (two Interbotix ViperX 300 6-DOF arms with parallel-jaw
-# grippers) on a mobile base -- a good match for the project goal. The render stage
-# (src/egodex_robot/stages/render.py) loads `assets/urdf/aloha.urdf` via rerun's built-in
-# URDF loader, which needs a *flat* .urdf (not xacro), so we expand the xacro here.
+#   https://github.com/agilexrobotics/mobile_aloha_sim
 #
-# Requires network access to github.com (may be blocked in sandboxed environments) and the
-# `xacro` tool (from ROS 2) on PATH. Exact in-repo paths should be verified on first fetch.
+# Mobile ALOHA is bimanual (two ViperX-class 6-DOF arms with parallel-jaw grippers) on an
+# AgileX Tracer mobile base. This repo ships a *flat* URDF (no xacro/ROS expansion needed):
 #
-# Alternatives if ROS/xacro is unavailable:
-#   - `pip install robot_descriptions` and use its ALOHA assets, or
-#   - google-deepmind/mujoco_menagerie `aloha` (MJCF; needs URDF conversion for rerun).
+#   aloha_description/aloha/urdf/aloha.urdf      # robot model
+#   aloha_description/aloha/meshes/*.STL         # meshes (referenced as package://aloha/...)
 #
+# The render stage loads `assets/urdf/aloha/urdf/aloha.urdf` via rerun's built-in URDF
+# loader (rerun-sdk >= 0.29). NOTE: the URDF references meshes with `package://aloha/...`;
+# we lay the files out so the package root `aloha/` sits next to the urdf. If rerun cannot
+# resolve `package://`, rewrite those refs to relative paths (sed) or point the loader at
+# this package root.
+#
+# Requires network access to github.com (may be blocked in sandboxed environments).
 # Usage: bash scripts/fetch_urdf.sh
 set -euo pipefail
 
 DEST="assets/urdf"
-REPO="https://github.com/Interbotix/aloha.git"   # maintained Mobile ALOHA / ALOHA 2 stack
+REPO="https://github.com/agilexrobotics/mobile_aloha_sim.git"
 mkdir -p "${DEST}"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
 
-git clone --depth 1 "${REPO}" "${TMP}/aloha"
+# Sparse-checkout only the ALOHA description (arms + grippers). The repo also has
+# tracer2_description (mobile base) and realsense2_description (camera) if needed later.
+git clone --depth 1 --filter=blob:none --sparse "${REPO}" "${TMP}/mobile_aloha_sim"
+git -C "${TMP}/mobile_aloha_sim" sparse-checkout set aloha_description/aloha
 
-# Locate the top-level bimanual ALOHA xacro and its meshes (path verified on fetch).
-XACRO="$(find "${TMP}/aloha" -name 'aloha*.urdf.xacro' | head -n1)"
-if [[ -z "${XACRO}" ]]; then
-  echo "Could not find an aloha*.urdf.xacro in ${REPO}." >&2
-  echo "Inspect the clone under ${TMP}/aloha and update this script's path." >&2
+# Copy the `aloha` ROS package so `package://aloha/...` resolves to assets/urdf/aloha/...
+cp -r "${TMP}/mobile_aloha_sim/aloha_description/aloha" "${DEST}/"
+
+URDF="${DEST}/aloha/urdf/aloha.urdf"
+if [[ -f "${URDF}" ]]; then
+  echo "Mobile ALOHA URDF ready at ${URDF}"
+else
+  echo "Expected ${URDF} not found; inspect ${DEST}/aloha and update render.DEFAULT_URDF." >&2
   exit 1
 fi
-
-# Copy meshes referenced by the description, then expand xacro -> flat URDF.
-DESC_DIR="$(dirname "$(dirname "${XACRO}")")"   # .../<pkg>/urdf/foo.xacro -> .../<pkg>
-cp -r "${DESC_DIR}/." "${DEST}/"
-xacro "${XACRO}" > "${DEST}/aloha.urdf"
-
-echo "Mobile ALOHA URDF written to ${DEST}/aloha.urdf"

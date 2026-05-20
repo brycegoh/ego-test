@@ -29,7 +29,7 @@ src/egodex_robot/
     grasp.py              GraspGen [GPU] + KMeans(2) contact-cluster fallback (CPU)
     render.py             load Mobile ALOHA URDF in rerun, pose to grasp, snapshot
     overlay.py            composite robot render over the original frame
-scripts/fetch_urdf.sh     fetch Mobile ALOHA description + expand xacro -> assets/urdf/aloha.urdf
+scripts/fetch_urdf.sh     fetch Mobile ALOHA flat URDF -> assets/urdf/aloha/urdf/aloha.urdf
 assets/urdf/              URDF + meshes land here (gitignored)
 outputs/                  stage artifacts: frames, poses, renders, overlays (gitignored)
 ```
@@ -38,7 +38,7 @@ outputs/                  stage artifacts: frames, poses, renders, overlays (git
 
 ```bash
 uv sync                          # core CPU env (lerobot, rerun-sdk, numpy, opencv, typer, sklearn)
-bash scripts/fetch_urdf.sh       # Mobile ALOHA URDF -> assets/urdf/aloha.urdf (needs xacro)
+bash scripts/fetch_urdf.sh       # Mobile ALOHA flat URDF -> assets/urdf/aloha/urdf/aloha.urdf
 uv run egodex <stage> [--frame N]
 ```
 
@@ -67,11 +67,12 @@ rather than importing heavy deps at module load.
 - **Hand pose** defaults to the dataset's **ARKit 3D annotations** (`pose.decode_state`),
   not HAMER. HAMER is optional/comparison only.
 - **Grasp**: prefer GraspGen; KMeans(2) over fingertip/contact points is the CPU fallback.
-- **Robot**: Mobile ALOHA (bimanual, two ViperX 300 6-DOF arms, parallel-jaw grippers,
-  mobile base). URDF comes from the Interbotix/Trossen `aloha` description (xacro, expanded
-  to `assets/urdf/aloha.urdf` by `scripts/fetch_urdf.sh`; needs the ROS `xacro` tool). MJCF
-  alternative: `google-deepmind/mujoco_menagerie` `aloha`. rerun's loader needs a flat URDF.
-  Left/right hands map onto the robot's left/right arms.
+- **Robot**: Mobile ALOHA (bimanual, two 6-DOF arms, parallel-jaw grippers, AgileX Tracer
+  mobile base). URDF comes from `agilexrobotics/mobile_aloha_sim` — a ready-made flat URDF
+  (`aloha_description/aloha/urdf/aloha.urdf`), no xacro/ROS needed; `scripts/fetch_urdf.sh`
+  lays it out at `assets/urdf/aloha/urdf/aloha.urdf`. Meshes use `package://aloha/...`; if
+  rerun can't resolve that, rewrite the refs to relative paths. Left/right hands map onto
+  the robot's left/right arms.
 - **Camera**: single egocentric view (the only view EgoDex provides).
 - **Reuse** existing tools — don't re-implement: `LeRobotDataset` (loading), rerun's
   built-in URDF loader (rerun-sdk ≥ 0.29) and lerobot's rerun viz approach (visualization).

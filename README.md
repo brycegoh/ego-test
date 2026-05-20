@@ -75,9 +75,9 @@ Design decisions:
   a KMeans(2) clustering of fingertip/contact points into the two gripper jaws is the
   no-GPU fallback.
 - **Render** uses [rerun](https://rerun.io)'s built-in URDF loader with the **Mobile
-  ALOHA** description ([Interbotix/aloha](https://github.com/Interbotix/aloha), xacro →
-  URDF via `scripts/fetch_urdf.sh`; MJCF alternative in
-  [mujoco_menagerie](https://github.com/google-deepmind/mujoco_menagerie/tree/main/aloha)).
+  ALOHA** description from
+  [agilexrobotics/mobile_aloha_sim](https://github.com/agilexrobotics/mobile_aloha_sim)
+  (a ready-made flat URDF — no xacro needed — fetched by `scripts/fetch_urdf.sh`).
 
 ## Visualization
 
@@ -102,7 +102,7 @@ panels (sharing the dataset timeline so scrubbing stays in sync):
 
 ```bash
 uv sync                          # install the core CPU env
-bash scripts/fetch_urdf.sh       # fetch + expand the Mobile ALOHA URDF into assets/urdf/
+bash scripts/fetch_urdf.sh       # fetch the Mobile ALOHA URDF + meshes into assets/urdf/
 
 uv run egodex load               # download + inspect the dataset, dump a sample frame
 uv run egodex viz                # rerun: 3D scene | edited video | original video
