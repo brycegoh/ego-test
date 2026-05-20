@@ -6,17 +6,28 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 
-# Core deps for the CPU-only stages (dataset load, viz, render, overlay, grasp fallback).
-# NOTE: not installed yet -- this task only scaffolds the project. Run `uv sync` to install.
+# Core deps for the CPU-only stages (dataset load, viz, IK, render, overlay, grasp fallback).
 dependencies = [
     "lerobot",            # LeRobotDataset loader for pepijn223/egodex-test
-    "rerun-sdk>=0.29",    # 3D viz + built-in URDF loader for the Mobile ALOHA render
+    "rerun-sdk>=0.29",    # 3-panel viz (3D scene + image streams); displays the overlay
     "numpy",
     "opencv-python",      # frame I/O + overlay compositing
     "huggingface-hub",    # dataset/asset download
     "typer>=0.12",        # CLI
     "scikit-learn",       # KMeans(2) contact-point clustering fallback for grasps
+    "placo",              # full-arm IK/FK on the fl_/fr_ follower chains (single kinematics source)
+    "pyrender",           # offscreen rasterisation of the posed robot (rerun cannot do this)
+    "pyopengl>=3.1.5",    # OSMesa needs OSMesaCreateContextAttribs (absent in 3.1.0)
+    "trimesh",            # load the URDF visual meshes for pyrender / rerun
+    "pycollada",          # trimesh backend for the URDF's .dae meshes
 ]
+
+# Headless rendering (the render/viz overlay): pyrender needs an offscreen GL context.
+#   - EGL  (GPU): set PYOPENGL_PLATFORM=egl   (needs an EGL library)
+#   - OSMesa (CPU): set PYOPENGL_PLATFORM=osmesa  (apt-get install libosmesa6 libosmesa6-dev)
+# stages/render.py defaults PYOPENGL_PLATFORM to "osmesa" if it is unset.
+# Alpha is taken from the depth buffer because the OSMesa backend does not honour pyrender's
+# RGBA flag.
 
 # Heavy ML stages (HAMER, SAM-3D-Objects, GraspGen) are intentionally NOT extras here:
 # they each need a GPU + large weights and have mutually conflicting torch/CUDA deps, so
