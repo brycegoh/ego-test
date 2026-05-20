@@ -103,6 +103,7 @@ panels (sharing the dataset timeline so scrubbing stays in sync):
 ```bash
 uv sync                          # install the core CPU env
 bash scripts/fetch_urdf.sh       # fetch the Mobile ALOHA URDF + meshes into assets/urdf/
+export ROS_PACKAGE_PATH="$PWD/assets/urdf"   # so rerun resolves package:// mesh refs
 
 uv run egodex load               # download + inspect the dataset, dump a sample frame
 uv run egodex viz                # rerun: 3D scene | edited video | original video

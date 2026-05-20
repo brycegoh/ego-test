@@ -67,12 +67,16 @@ rather than importing heavy deps at module load.
 - **Hand pose** defaults to the dataset's **ARKit 3D annotations** (`pose.decode_state`),
   not HAMER. HAMER is optional/comparison only.
 - **Grasp**: prefer GraspGen; KMeans(2) over fingertip/contact points is the CPU fallback.
-- **Robot**: Mobile ALOHA (bimanual, two 6-DOF arms, parallel-jaw grippers, AgileX Tracer
-  mobile base). URDF comes from `agilexrobotics/mobile_aloha_sim` — a ready-made flat URDF
-  (`aloha_description/aloha/urdf/aloha.urdf`), no xacro/ROS needed; `scripts/fetch_urdf.sh`
-  lays it out at `assets/urdf/aloha/urdf/aloha.urdf`. Meshes use `package://aloha/...`; if
-  rerun can't resolve that, rewrite the refs to relative paths. Left/right hands map onto
-  the robot's left/right arms.
+- **Robot**: Mobile ALOHA (bimanual 6-DOF parallel-jaw arms on an AgileX Tracer base). URDF
+  from `agilexrobotics/mobile_aloha_sim` (master), file
+  `aloha_new_description/urdf/aloha_tracer2_dabai_dark.urdf` — a flat URDF, no xacro/ROS
+  needed. `scripts/fetch_urdf.sh` lays it out under `assets/urdf/` (validated: 52 links, 36
+  actuated joints, 99 meshes, all resolve). The model has four arm chains: `fl_`/`fr_`
+  (front = follower manipulators we retarget) and `bl_`/`br_` (back = leaders).
+- **Mesh resolution**: meshes are `package://<pkg>/...`. rerun resolves these via
+  `ROS_PACKAGE_PATH`, which must include `assets/urdf/` (the dir holding the package-named
+  folders). `render.ensure_package_path()` sets this; validated that rerun then embeds all
+  meshes. (No mesh-path rewriting needed.)
 - **Camera**: single egocentric view (the only view EgoDex provides).
 - **Reuse** existing tools — don't re-implement: `LeRobotDataset` (loading), rerun's
   built-in URDF loader (rerun-sdk ≥ 0.29) and lerobot's rerun viz approach (visualization).
