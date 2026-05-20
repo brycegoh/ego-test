@@ -5,7 +5,7 @@ to read/write small artifacts under `outputs/`, so they can be invoked one at a 
 short commands or chained with `egodex run`.
 
     egodex load                 # download + inspect pepijn223/egodex-test, dump a frame
-    egodex viz                  # stream RGB + 3D hand keypoints to rerun
+    egodex viz                  # rerun: 3D scene | edited video | original video
     egodex hand --frame N       # extract hand pose for a frame (ARKit annotations / HAMER)
     egodex object --frame N     # reconstruct the manipulated object in 3D (SAM-3D)  [GPU]
     egodex grasp --frame N      # generate parallel-gripper grasp (GraspGen / KMeans)
@@ -44,7 +44,7 @@ def viz(
     repo_id: str = typer.Option(DATASET_REPO_ID, help="LeRobot dataset repo id."),
     episode: int = typer.Option(0, help="Episode index to visualize."),
 ) -> None:
-    """Stream RGB frames + 3D hand keypoints/skeleton + camera frustum to rerun."""
+    """Open a 3-panel rerun view: 3D scene | edited (overlaid) video | original video."""
     raise NotImplementedError(_NOT_IMPLEMENTED)
 
 

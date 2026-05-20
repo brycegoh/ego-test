@@ -22,7 +22,7 @@ src/egodex_robot/
   dataset.py              LeRobotDataset loader + schema inspection + frame extraction
   pose.py                 decode ARKit hand pose from the 48-dim observation.state
   geometry.py             camera intrinsics/extrinsics + SE(3) helpers, projection
-  viz.py                  rerun logging (RGB + 3D hand keypoints + camera frustum)
+  viz.py                  rerun 3-panel view: 3D scene | edited video | original video
   stages/
     hamer.py              [GPU] optional RGB hand-mesh reconstruction (HAMER)
     sam3d.py              [GPU] object 3D reconstruction (SAM-3D-Objects)

@@ -76,6 +76,25 @@ Design decisions:
   [SO-101 URDF](https://github.com/TheRobotStudio/SO-ARM100)
   (`Simulation/SO101/so101_new_calib.urdf`).
 
+## Visualization
+
+`egodex viz` opens a [rerun](https://rerun.io) window laid out as three synchronized
+panels (sharing the dataset timeline so scrubbing stays in sync):
+
+```
+┌──────────────┬──────────────────┬──────────────────┐
+│   3D scene   │   edited video   │  original video  │
+│ hand kpts +  │  robot overlaid  │   raw egocentric │
+│ object mesh +│  on the frame    │      RGB         │
+│ SO-101 URDF  │                  │                  │
+└──────────────┴──────────────────┴──────────────────┘
+```
+
+- **3D scene** — camera frustum, 3D hand keypoints/skeleton, reconstructed object mesh,
+  and the posed SO-101 URDF.
+- **edited video** — the overlay output (robot composited over the frame).
+- **original video** — the raw egocentric RGB stream.
+
 ## Commands (intended UX)
 
 ```bash
@@ -83,7 +102,7 @@ uv sync                          # install the core CPU env
 bash scripts/fetch_urdf.sh       # download the SO-101 URDF into assets/urdf/
 
 uv run egodex load               # download + inspect the dataset, dump a sample frame
-uv run egodex viz                # stream RGB + 3D hand keypoints to rerun
+uv run egodex viz                # rerun: 3D scene | edited video | original video
 uv run egodex hand   --frame 0   # hand pose (ARKit annotations / HAMER)
 uv run egodex object --frame 0   # object 3D reconstruction (SAM-3D)        [GPU]
 uv run egodex grasp  --frame 0   # parallel-gripper grasp (GraspGen / KMeans)
