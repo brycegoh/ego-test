@@ -1,7 +1,7 @@
-# EgoDex → SO-101 robot retargeting
+# EgoDex → Mobile ALOHA robot retargeting
 
 Turn an **egocentric human-hand** manipulation dataset into something usable for a
-**bimanual mobile manipulator with parallel grippers** (SO-100/SO-101): reconstruct each
+**bimanual mobile manipulator with parallel grippers** (Mobile ALOHA): reconstruct each
 frame's scene in 3D, place the robot where the hands are, pick a sensible grasp, render it
 through the original camera, and overlay the robot on the egocentric frame.
 
@@ -27,8 +27,10 @@ through the original camera, and overlay the robot on the egocentric frame.
 ## Problem & goal
 
 The data shows *human hands*, not a robot, and the hand is present in the camera frame.
-We want, for a given egocentric frame, a recreated image in which an SO-101 arm is
+We want, for a given egocentric frame, a recreated image in which a Mobile ALOHA arm is
 positioned like the hand and — when grasping — chooses a sensible gripper orientation.
+Mobile ALOHA is bimanual (two ViperX 300 6-DOF arms with parallel-jaw grippers on a mobile
+base), so the left/right hands map naturally onto its left/right arms.
 
 Challenges:
 1. **Hand → gripper pose translation** (human hand vs. 2-finger parallel gripper).
@@ -56,7 +58,7 @@ Challenges:
                           • KMeans(2) contact clusters  (CPU fallback)
                                │
                                ▼
-                     SO-101 URDF render in rerun
+                     Mobile ALOHA URDF render in rerun
                      (pose arms to grasp, snapshot via camera intrinsics)
                                │
                                ▼
@@ -72,9 +74,10 @@ Design decisions:
 - **Grasp** is generated with [GraspGen](https://github.com/NVlabs/GraspGen) (preferred);
   a KMeans(2) clustering of fingertip/contact points into the two gripper jaws is the
   no-GPU fallback.
-- **Render** uses [rerun](https://rerun.io)'s built-in URDF loader with the
-  [SO-101 URDF](https://github.com/TheRobotStudio/SO-ARM100)
-  (`Simulation/SO101/so101_new_calib.urdf`).
+- **Render** uses [rerun](https://rerun.io)'s built-in URDF loader with the **Mobile
+  ALOHA** description ([Interbotix/aloha](https://github.com/Interbotix/aloha), xacro →
+  URDF via `scripts/fetch_urdf.sh`; MJCF alternative in
+  [mujoco_menagerie](https://github.com/google-deepmind/mujoco_menagerie/tree/main/aloha)).
 
 ## Visualization
 
@@ -86,12 +89,12 @@ panels (sharing the dataset timeline so scrubbing stays in sync):
 │   3D scene   │   edited video   │  original video  │
 │ hand kpts +  │  robot overlaid  │   raw egocentric │
 │ object mesh +│  on the frame    │      RGB         │
-│ SO-101 URDF  │                  │                  │
+│ ALOHA URDF   │                  │                  │
 └──────────────┴──────────────────┴──────────────────┘
 ```
 
 - **3D scene** — camera frustum, 3D hand keypoints/skeleton, reconstructed object mesh,
-  and the posed SO-101 URDF.
+  and the posed Mobile ALOHA URDF.
 - **edited video** — the overlay output (robot composited over the frame).
 - **original video** — the raw egocentric RGB stream.
 
@@ -99,14 +102,14 @@ panels (sharing the dataset timeline so scrubbing stays in sync):
 
 ```bash
 uv sync                          # install the core CPU env
-bash scripts/fetch_urdf.sh       # download the SO-101 URDF into assets/urdf/
+bash scripts/fetch_urdf.sh       # fetch + expand the Mobile ALOHA URDF into assets/urdf/
 
 uv run egodex load               # download + inspect the dataset, dump a sample frame
 uv run egodex viz                # rerun: 3D scene | edited video | original video
 uv run egodex hand   --frame 0   # hand pose (ARKit annotations / HAMER)
 uv run egodex object --frame 0   # object 3D reconstruction (SAM-3D)        [GPU]
 uv run egodex grasp  --frame 0   # parallel-gripper grasp (GraspGen / KMeans)
-uv run egodex render --frame 0   # pose SO-101 URDF + snapshot
+uv run egodex render --frame 0   # pose Mobile ALOHA URDF + snapshot
 uv run egodex overlay --frame 0  # composite robot over the original frame
 uv run egodex run    --frame 0   # chain the available stages
 ```

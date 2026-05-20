@@ -6,8 +6,8 @@ Orientation for agents/developers working in this repo. Read alongside
 ## What this is
 
 A `uv` project that retargets the EgoDex egocentric human-hand dataset
-(`pepijn223/egodex-test`, LeRobot format) onto an SO-100/SO-101 parallel-gripper robot and
-overlays the robot on the original egocentric frame.
+(`pepijn223/egodex-test`, LeRobot format) onto a Mobile ALOHA bimanual parallel-gripper
+robot and overlays the robot on the original egocentric frame.
 
 **Current state: scaffold.** The package layout, CLI, and per-stage input/output contracts
 exist; the stage logic is **not implemented**. Every `.py` under `src/egodex_robot/` is a
@@ -27,9 +27,9 @@ src/egodex_robot/
     hamer.py              [GPU] optional RGB hand-mesh reconstruction (HAMER)
     sam3d.py              [GPU] object 3D reconstruction (SAM-3D-Objects)
     grasp.py              GraspGen [GPU] + KMeans(2) contact-cluster fallback (CPU)
-    render.py             load SO-101 URDF in rerun, pose to grasp, snapshot
+    render.py             load Mobile ALOHA URDF in rerun, pose to grasp, snapshot
     overlay.py            composite robot render over the original frame
-scripts/fetch_urdf.sh     download the SO-101 URDF from TheRobotStudio/SO-ARM100
+scripts/fetch_urdf.sh     fetch Mobile ALOHA description + expand xacro -> assets/urdf/aloha.urdf
 assets/urdf/              URDF + meshes land here (gitignored)
 outputs/                  stage artifacts: frames, poses, renders, overlays (gitignored)
 ```
@@ -38,7 +38,7 @@ outputs/                  stage artifacts: frames, poses, renders, overlays (git
 
 ```bash
 uv sync                          # core CPU env (lerobot, rerun-sdk, numpy, opencv, typer, sklearn)
-bash scripts/fetch_urdf.sh       # SO-101 URDF -> assets/urdf/
+bash scripts/fetch_urdf.sh       # Mobile ALOHA URDF -> assets/urdf/aloha.urdf (needs xacro)
 uv run egodex <stage> [--frame N]
 ```
 
@@ -67,8 +67,11 @@ rather than importing heavy deps at module load.
 - **Hand pose** defaults to the dataset's **ARKit 3D annotations** (`pose.decode_state`),
   not HAMER. HAMER is optional/comparison only.
 - **Grasp**: prefer GraspGen; KMeans(2) over fingertip/contact points is the CPU fallback.
-- **Robot**: SO-100/SO-101, URDF `Simulation/SO101/so101_new_calib.urdf` from
-  `TheRobotStudio/SO-ARM100`.
+- **Robot**: Mobile ALOHA (bimanual, two ViperX 300 6-DOF arms, parallel-jaw grippers,
+  mobile base). URDF comes from the Interbotix/Trossen `aloha` description (xacro, expanded
+  to `assets/urdf/aloha.urdf` by `scripts/fetch_urdf.sh`; needs the ROS `xacro` tool). MJCF
+  alternative: `google-deepmind/mujoco_menagerie` `aloha`. rerun's loader needs a flat URDF.
+  Left/right hands map onto the robot's left/right arms.
 - **Camera**: single egocentric view (the only view EgoDex provides).
 - **Reuse** existing tools — don't re-implement: `LeRobotDataset` (loading), rerun's
   built-in URDF loader (rerun-sdk ≥ 0.29) and lerobot's rerun viz approach (visualization).

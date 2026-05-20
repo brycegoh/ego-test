@@ -1,7 +1,7 @@
 [project]
 name = "egodex-robot"
 version = "0.1.0"
-description = "Retarget the EgoDex egocentric human-hand dataset onto an SO-100/SO-101 parallel-gripper robot and overlay it on the original frame."
+description = "Retarget the EgoDex egocentric human-hand dataset onto a Mobile ALOHA bimanual parallel-gripper robot and overlay it on the original frame."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -10,7 +10,7 @@ license = { text = "MIT" }
 # NOTE: not installed yet -- this task only scaffolds the project. Run `uv sync` to install.
 dependencies = [
     "lerobot",            # LeRobotDataset loader for pepijn223/egodex-test
-    "rerun-sdk>=0.29",    # 3D viz + built-in URDF loader for the SO-101 render
+    "rerun-sdk>=0.29",    # 3D viz + built-in URDF loader for the Mobile ALOHA render
     "numpy",
     "opencv-python",      # frame I/O + overlay compositing
     "huggingface-hub",    # dataset/asset download
