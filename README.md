@@ -7,6 +7,10 @@ Given an egocentric dataset, make it compatible to use to train a bimanual mobil
 1. hand to gripper pose translation
 2. hand is present in camera frame
 
+# Goal
+
+Given a video frame of the top, left wrist and right wrist, recreate it such that the video contains the robot arm positioned like the hand. When grapping things, it also chooses a sensible orientation.
+
 # Existing Literature
 
 Dex-umi that inpained the human hand with robotic hand
