@@ -3,20 +3,21 @@
 https://github.com/facebookresearch/sam-3d-objects
 
 Reconstructs the manipulated object from the egocentric frame so it can be placed in the
-rerun scene and used as grasp context for GraspGen. Needs a GPU + its own environment +
-weights; everything is import-gated.
+rerun scene and used as grasp context for GraspGen. First-class GPU stage: ``torch`` /
+``trimesh`` are imported at module top (the ``sam3d`` extra installs them + pytorch3d). The
+repo's ``inference`` helper is a notebook script, not an installed package, so it is imported
+at call time after its directory is added to ``sys.path``.
 
 Contract:
-    input  -> RGB frame (H, W, 3) uint8 + a binary object mask (H, W) (e.g. from SAM)
+    input  -> RGB frame (H, W, 3) uint8 + a binary object mask (H, W) (from stages/segment.py)
     output -> {"vertices": (N, 3), "faces": (F, 3) | None, "pose": (4, 4)} in the camera
               frame. SAM 3D Objects emits a Gaussian splat plus a local->camera layout
               (rotation quaternion + translation + scale); we expose the splat points as the
               object geometry and pack the layout into ``pose``.
 
-Environment (do NOT add to the core env; see AGENTS.md):
+Environment (its own venv -- conflicting CUDA pins with HAMER/GraspGen; see AGENTS.md):
     git clone https://github.com/facebookresearch/sam-3d-objects && cd sam-3d-objects
     pip install -e . && download the checkpoints into checkpoints/hf/
-    (see the repo's notebook/ for mask prompting; masks come from SAM/SAM2.)
 
 This wrapper mirrors sam-3d-objects/demo.py (`Inference(config).__call__(image, mask)`). It
 is GPU-only and cannot be exercised in the CPU sandbox where it was written. Note: SAM 3D
@@ -30,11 +31,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-
-_SETUP_HINT = (
-    "SAM-3D-Objects is not available. Set up its GPU environment (clone "
-    "facebookresearch/sam-3d-objects, pip install -e ., fetch checkpoints/hf/). See AGENTS.md."
-)
+import torch  # noqa: F401  (required by the sam-3d-objects inference pipeline)
+import trimesh
 
 DEFAULT_CONFIG = "checkpoints/hf/pipeline.yaml"
 
@@ -60,21 +58,19 @@ def reconstruct_object(
     seed: int = 42,
 ) -> dict[str, Any]:
     """Return {vertices, faces, pose} for the masked object in the camera frame. Requires GPU."""
-    try:
-        import sys
+    import sys
 
-        # The repo ships its inference helpers under notebook/; make them importable.
-        repo_notebook = Path(config_path).resolve().parents[2] / "notebook"
-        if repo_notebook.is_dir() and str(repo_notebook) not in sys.path:
-            sys.path.append(str(repo_notebook))
-        from inference import Inference  # noqa: E402  (from sam-3d-objects/notebook)
-    except ImportError as exc:  # pragma: no cover - GPU env only
-        raise NotImplementedError(_SETUP_HINT) from exc
+    # The repo ships its inference helper under notebook/ (a script, not a package); make it
+    # importable from the checkpoint config's location.
+    repo_notebook = Path(config_path).resolve().parents[2] / "notebook"
+    if repo_notebook.is_dir() and str(repo_notebook) not in sys.path:
+        sys.path.append(str(repo_notebook))
+    from inference import Inference  # noqa: E402  (from sam-3d-objects/notebook)
 
     if mask is None:
         raise ValueError(
-            "SAM-3D-Objects needs a binary object mask (H, W). Prompt SAM/SAM2 to segment "
-            "the manipulated object, then pass its mask here."
+            "SAM-3D-Objects needs a binary object mask (H, W) from stages/segment.py "
+            "(SAM2). Pass its mask here."
         )
 
     inference = Inference(str(config_path), compile=False)
@@ -83,10 +79,7 @@ def reconstruct_object(
     gaussian = output["gaussian"][0]
     vertices = gaussian.get_xyz.detach().cpu().numpy()
 
-    faces = None
     try:  # convex hull is a usable stand-in for the splat's surface
-        import trimesh
-
         faces = trimesh.convex.convex_hull(vertices).faces
     except Exception:  # pragma: no cover
         faces = None

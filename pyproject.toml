@@ -29,9 +29,32 @@ dependencies = [
 # Alpha is taken from the depth buffer because the OSMesa backend does not honour pyrender's
 # RGBA flag.
 
-# Heavy ML stages (HAMER, SAM-3D-Objects, GraspGen) are intentionally NOT extras here:
-# they each need a GPU + large weights and have mutually conflicting torch/CUDA deps, so
-# they must live in their own environments. See AGENTS.md for setup.
+# GPU model stages as per-stage optional extras. Each is a SEPARATE install: HAMER,
+# SAM-3D-Objects, GraspGen and SAM 2 have mutually conflicting torch/CUDA pins, so install
+# only the one(s) you need into their own environment (do NOT `pip install '.[all-gpu]'`).
+# These are best-effort: some sub-deps don't express as plain requirements (HAMER's
+# third-party/ViTPose, detectron2 from git; SAM-3D's pytorch3d) and need the manual steps in
+# AGENTS.md. The stage modules import their deps at module top -- importing a stage requires
+# its extra; the CPU stages and `import egodex_robot` stay torch-free.
+[project.optional-dependencies]
+hamer = [
+    "torch",
+    "hamer @ git+https://github.com/geopavlakos/hamer",
+    # also: `pip install -v -e third-party/ViTPose` and a detectron2 build; see AGENTS.md.
+]
+sam2 = [
+    "torch",
+    "sam2 @ git+https://github.com/facebookresearch/sam2",
+]
+sam3d = [
+    "torch",
+    "sam-3d-objects @ git+https://github.com/facebookresearch/sam-3d-objects",
+    # also needs pytorch3d (see the repo's requirements.p3d.txt); checkpoints under checkpoints/hf/.
+]
+graspgen = [
+    "torch",
+    "graspgen @ git+https://github.com/NVlabs/GraspGen",
+]
 
 [project.scripts]
 egodex = "egodex_robot.cli:app"

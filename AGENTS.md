@@ -47,26 +47,36 @@ independently or chained via `egodex run`.
 
 ## Environments: what runs where
 
-**CPU-only (core `uv` env)** — implementable and runnable here:
-`load`, `viz`, `grasp` (KMeans fallback), `render`, `overlay`.
+The pipeline runs the **full GPU chain by default** (HAMER hands → SAM 2 mask → SAM-3D
+object → GraspGen grasp). A **CPU fallback** (ARKit pose + KMeans grasp, no object recon)
+runs without a GPU via `--cpu` (or `--arkit` / `--kmeans`) and covers `load`, `viz`,
+`render`, `overlay`, `run`.
 
-**GPU + separate environment + large weights** — do **not** add these to the core env;
-they have mutually conflicting torch/CUDA/dependency pins and each expects its own setup:
-- **HAMER** — https://github.com/geopavlakos/hamer — hand mesh from RGB.
-- **SAM-3D-Objects** — https://github.com/facebookresearch/sam-3d-objects — object mesh.
-- **GraspGen** — https://github.com/NVlabs/GraspGen — 6-DOF parallel-gripper grasps.
+The GPU stages are **first-class code**: their heavy imports live at the top of each stage
+module (no `try/except`, no `NotImplementedError`), and they are declared as **per-stage
+optional extras** in `pyproject.toml`:
+- **HAMER** — https://github.com/geopavlakos/hamer — `pip install '.[hamer]'`
+- **SAM 2** — https://github.com/facebookresearch/sam2 — `pip install '.[sam2]'`
+- **SAM-3D-Objects** — https://github.com/facebookresearch/sam-3d-objects — `pip install '.[sam3d]'`
+- **GraspGen** — https://github.com/NVlabs/GraspGen — `pip install '.[graspgen]'`
 
-Recommended pattern: install each in its own venv/conda env, run it as a separate step
-that writes a mesh/pose/grasp artifact into `outputs/`, then let the CPU stages
-(`render`, `overlay`) consume those artifacts. Keep model weights under `weights/`
-(gitignored). The gated modules raise a clear `NotImplementedError` with a pointer here
-rather than importing heavy deps at module load.
+Install each into **its own environment** — they have mutually conflicting torch/CUDA pins,
+so they cannot coexist in one process (the shared `pipeline.py` imports only the *selected*
+backend, lazily). The extras are best-effort: some sub-deps don't express as plain
+requirements (HAMER's `third-party/ViTPose` + a detectron2 build; SAM-3D's pytorch3d) and
+need the manual steps in each stage module's docstring. Keep model weights under `weights/`
+or the repo-specified `checkpoints/` (gitignored). Importing `egodex_robot` and the CPU
+stages never pulls in torch — only a selected GPU stage module does.
 
 ## Key facts / decisions
 
-- **Hand pose** defaults to the dataset's **ARKit 3D annotations** (`pose.decode_state`),
-  not HAMER. HAMER is optional/comparison only.
-- **Grasp**: prefer GraspGen; KMeans(2) over fingertip/contact points is the CPU fallback.
+- **Hand pose** defaults to **HAMER** (`stages/hamer.py`); the dataset's **ARKit 3D
+  annotations** (`pose.decode_state`) are the CPU fallback (`--arkit` / `Backends.cpu()`).
+- **Grasp**: defaults to **GraspGen** (`stages/graspgen.py`, needs the SAM 2 → SAM-3D object);
+  KMeans(2) over fingertip/contact points is the CPU fallback (`--kmeans`).
+- **Object**: **SAM 2** (`stages/segment.py`) masks the held object → **SAM-3D-Objects**
+  (`stages/sam3d.py`) reconstructs it. Camera-frame outputs are lifted to the world (ARKit)
+  frame in `pipeline.py` so grasps and the hand pose are compared in one frame.
 - **Robot**: Mobile ALOHA (bimanual 6-DOF parallel-jaw arms on an AgileX Tracer base). URDF
   from `agilexrobotics/mobile_aloha_sim` (master), file
   `aloha_new_description/urdf/aloha_tracer2_dabai_dark.urdf` — a flat URDF, no xacro/ROS
@@ -87,8 +97,10 @@ rather than importing heavy deps at module load.
 
 - CLI via Typer; one subcommand per stage; stages take `--frame`/`--episode` and print the
   output paths they wrote.
-- Heavy/optional deps are **import-gated** inside the stage that needs them — importing
-  `egodex_robot` must never require a GPU or pull torch from HAMER/SAM-3D/GraspGen.
+- GPU stages import their deps at module top (installed via per-stage extras). The CPU path
+  and `import egodex_robot` stay torch-free because `pipeline.py` / the CLI import a GPU
+  stage module only when its backend is selected. Don't reintroduce module-level GPU imports
+  into the shared modules (`pipeline.py`, `stages/grasp.py`, `stages/render.py`).
 - Write artifacts to `outputs/`; weights to `weights/`; both are gitignored.
 
 ## Environment caveats

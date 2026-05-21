@@ -6,15 +6,17 @@ artifacts under `outputs/`, so they can be invoked one at a time or chained with
 
     egodex load                 # download + inspect pepijn223/egodex-test, dump a frame
     egodex viz                  # rerun: 3D scene | edited video | original video
-    egodex hand --frame N       # decode ARKit hand pose for a frame
-    egodex object --frame N     # reconstruct the manipulated object in 3D (SAM-3D)  [GPU]
-    egodex grasp --frame N      # parallel-gripper grasp (GraspGen / KMeans fallback)
+    egodex hand --frame N       # hand pose (HAMER by default; --arkit for annotations)
+    egodex object --frame N     # reconstruct the manipulated object (SAM 2 + SAM-3D) [GPU]
+    egodex grasp --frame N      # parallel-gripper grasp (GraspGen by default; --kmeans CPU)
     egodex render --frame N     # IK the Mobile ALOHA arms + render through the camera
     egodex overlay --frame N    # composite the robot render over the original frame
-    egodex run --frame N        # chain the available stages end-to-end
+    egodex run --frame N        # chain the stages end-to-end
 
-CPU stages (no GPU): load, viz, hand, grasp (KMeans), render, overlay, run.
-GPU stages (separate env + weights): object, hand --hamer, grasp --graspgen.
+The pipeline runs the **full GPU chain by default** (HAMER hands -> SAM 2 mask -> SAM-3D
+object -> GraspGen grasp). Pass `--cpu` (or `--arkit` / `--kmeans`) to use the no-GPU
+fallback (ARKit pose + KMeans grasp). GPU stages need their per-stage extras + weights;
+each lives in its own env (conflicting CUDA pins) -- see AGENTS.md.
 """
 
 from __future__ import annotations
@@ -47,28 +49,21 @@ def _save_rgba(path: Path, rgba: np.ndarray) -> None:
     cv2.imwrite(str(path), cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
 
 
-def _retarget_frame(frame: dict, urdf_path: Path | None = None):
-    """Shared core: ARKit pose -> grasp targets -> IK -> render. Returns (result, rgba, info)."""
-    from . import geometry, pose
-    from .ik import EE_FRAMES, RobotIK
-    from .stages import grasp as grasp_stage
-    from .stages import render as render_stage
+def _backends(cpu: bool, gripper_config: str = ""):
+    """Build a pipeline.Backends from CLI flags (GPU default unless --cpu)."""
+    from .pipeline import Backends
 
-    hands = pose.decode_state(frame["observation.state"])
-    targets = {
-        side: grasp_stage.grasp_from_contacts(pose.contact_points(hands[side])).as_se3()
-        for side in EE_FRAMES
-        if side in hands
-    }
-    ik = RobotIK() if urdf_path is None else RobotIK(urdf_path)
-    base = geometry.robot_base_from_camera(frame["extrinsics"])
-    result = ik.solve(targets, base_transform=base)
-
-    height, width = frame["rgb"].shape[:2]
-    rgba = render_stage.render_robot(
-        result.link_transforms, frame["intrinsics"], frame["extrinsics"], (width, height), ik.urdf_path
-    )
-    return hands, result, rgba
+    if cpu:
+        return Backends.cpu()
+    backends = Backends()
+    if gripper_config:
+        backends.gripper_config = gripper_config
+    if not backends.gripper_config:
+        raise typer.BadParameter(
+            "The default GPU grasp backend (GraspGen) needs --gripper-config <yaml>. "
+            "Pass --cpu to use the KMeans fallback instead."
+        )
+    return backends
 
 
 @app.command()
@@ -98,22 +93,24 @@ def load(
 def viz(
     repo_id: str = typer.Option(DATASET_REPO_ID, help="LeRobot dataset repo id."),
     episode: int = typer.Option(0, help="Episode index to visualize."),
+    cpu: bool = typer.Option(False, help="Use the CPU fallback (ARKit pose + KMeans grasp)."),
+    gripper_config: str = typer.Option("", help="GraspGen gripper YAML (GPU default)."),
 ) -> None:
     """Open a 3-panel rerun view: 3D scene | edited (overlaid) video | original video."""
     from . import dataset as ds
     from . import viz as viz_mod
 
     dataset = ds.load_dataset(repo_id)
-    viz_mod.log_episode(dataset, episode=episode)
+    viz_mod.log_episode(dataset, episode=episode, backends=_backends(cpu, gripper_config))
 
 
 @app.command()
 def hand(
     frame: int = typer.Option(..., help="Frame index."),
     repo_id: str = typer.Option(DATASET_REPO_ID, help="LeRobot dataset repo id."),
-    hamer: bool = typer.Option(False, help="Use HAMER (RGB, GPU) instead of ARKit annotations."),
+    arkit: bool = typer.Option(False, help="Use the dataset's ARKit annotations instead of HAMER."),
 ) -> None:
-    """Decode the hand pose for a frame (ARKit annotations by default; HAMER with --hamer [GPU])."""
+    """Extract the hand pose for a frame (HAMER [GPU] by default; --arkit for annotations)."""
     from . import dataset as ds
     from . import pose
 
@@ -122,7 +119,7 @@ def hand(
     OUTPUTS.mkdir(parents=True, exist_ok=True)
     out = OUTPUTS / f"hand_{frame:05d}.npz"
 
-    if hamer:
+    if not arkit:
         from .stages.hamer import reconstruct_hands  # GPU + weights; see AGENTS.md
 
         recon = reconstruct_hands(sample["rgb"])
@@ -145,7 +142,7 @@ def hand(
         },
     )
     for side, h in hands.items():
-        print(f"{side}: wrist {np.round(h.wrist_position, 3)}, {len(h.keypoints)} fingertips")
+        print(f"{side}: wrist {np.round(h.wrist_position, 3)}, {len(h.keypoints)} fingertips (ARKit)")
     print(f"wrote {out}")
 
 
@@ -153,20 +150,23 @@ def hand(
 def object(
     frame: int = typer.Option(..., help="Frame index."),
     repo_id: str = typer.Option(DATASET_REPO_ID, help="LeRobot dataset repo id."),
-    mask: str = typer.Option("", help="Path to a binary object mask PNG (from SAM/SAM2)."),
+    mask: str = typer.Option("", help="Object mask PNG; if omitted, SAM 2 segments automatically."),
     config: str = typer.Option("checkpoints/hf/pipeline.yaml", help="SAM-3D pipeline config."),
 ) -> None:
-    """Reconstruct the manipulated object's 3D mesh from RGB (SAM-3D-Objects). [GPU]"""
+    """Reconstruct the manipulated object's 3D mesh (SAM 2 mask -> SAM-3D-Objects). [GPU]"""
     from . import dataset as ds
     from .stages.sam3d import reconstruct_object
 
     dataset = ds.load_dataset(repo_id)
     sample = ds.get_frame(dataset, frame)
-    mask_arr = None
     if mask:
         import cv2
 
-        mask_arr = cv2.imread(mask, cv2.IMREAD_GRAYSCALE)
+        mask_arr = cv2.imread(mask, cv2.IMREAD_GRAYSCALE) > 0
+    else:
+        from .stages.segment import segment_object  # GPU; SAM 2
+
+        mask_arr = segment_object(sample["rgb"])
     recon = reconstruct_object(sample["rgb"], mask=mask_arr, config_path=config)
     OUTPUTS.mkdir(parents=True, exist_ok=True)
     out = OUTPUTS / f"object_{frame:05d}.npz"
@@ -178,11 +178,11 @@ def object(
 def grasp(
     frame: int = typer.Option(..., help="Frame index."),
     repo_id: str = typer.Option(DATASET_REPO_ID, help="LeRobot dataset repo id."),
-    graspgen: bool = typer.Option(False, help="Use GraspGen (GPU) on a reconstructed object mesh."),
-    gripper_config: str = typer.Option("", help="GraspGen gripper YAML (required with --graspgen)."),
-    object_npz: str = typer.Option("", help="Object mesh artifact from `egodex object` (--graspgen)."),
+    kmeans: bool = typer.Option(False, help="Use the CPU KMeans fallback instead of GraspGen."),
+    gripper_config: str = typer.Option("", help="GraspGen gripper YAML (required unless --kmeans)."),
+    object_npz: str = typer.Option("", help="Object artifact from `egodex object` (else reconstructed)."),
 ) -> None:
-    """Generate a parallel-gripper grasp (KMeans(2) over ARKit fingertips; GraspGen [GPU])."""
+    """Generate a parallel-gripper grasp (GraspGen [GPU] by default; --kmeans CPU fallback)."""
     from . import dataset as ds
     from . import pose
     from .stages import grasp as grasp_stage
@@ -194,12 +194,27 @@ def grasp(
     out = OUTPUTS / f"grasp_{frame:05d}.npz"
     payload = {}
 
-    if graspgen:
-        loaded = np.load(object_npz, allow_pickle=True)
-        object_mesh = {"vertices": loaded["vertices"], "faces": loaded["faces"], "pose": loaded["pose"]}
-        # Select per hand against that hand's wrist pose (must share the object's frame).
+    if not kmeans:
+        from .stages import graspgen
+
+        if object_npz:
+            loaded = np.load(object_npz, allow_pickle=True)
+            object_mesh = {"vertices": loaded["vertices"], "faces": loaded["faces"], "pose": loaded["pose"]}
+        else:
+            from . import geometry
+            from .stages.sam3d import reconstruct_object
+            from .stages.segment import segment_object
+
+            mask_arr = segment_object(sample["rgb"])
+            obj_cam = reconstruct_object(sample["rgb"], mask=mask_arr)
+            object_mesh = {
+                "vertices": geometry.cv_camera_points_to_world(obj_cam["vertices"], sample["extrinsics"]),
+                "faces": obj_cam["faces"],
+                "pose": geometry.cv_camera_pose_to_world(obj_cam["pose"], sample["extrinsics"]),
+            }
+        candidates = graspgen.graspgen_candidates(object_mesh, gripper_config)
         for side, h in hands.items():
-            g = grasp_stage.grasp_from_graspgen(object_mesh, hand_pose=h, gripper_config=gripper_config)
+            g = grasp_stage.select_grasp(candidates, h)
             payload[f"{side}_position"] = g.position
             payload[f"{side}_rotation"] = g.rotation
             payload[f"{side}_width"] = np.array([g.width])
@@ -219,21 +234,24 @@ def grasp(
 def render(
     frame: int = typer.Option(..., help="Frame index."),
     repo_id: str = typer.Option(DATASET_REPO_ID, help="LeRobot dataset repo id."),
+    cpu: bool = typer.Option(False, help="Use the CPU fallback (ARKit pose + KMeans grasp)."),
+    gripper_config: str = typer.Option("", help="GraspGen gripper YAML (GPU default)."),
 ) -> None:
     """Solve IK for the follower arms and render the robot through the camera intrinsics."""
     from . import dataset as ds
+    from . import pipeline
 
     dataset = ds.load_dataset(repo_id)
     sample = ds.get_frame(dataset, frame)
-    _, result, rgba = _retarget_frame(sample)
-    for side, arm in result.arms.items():
+    result = pipeline.retarget_frame(sample, backends=_backends(cpu, gripper_config))
+    for side, arm in result.ik.arms.items():
         flag = "" if arm.reachable else "  [clamped: target out of reach]"
         print(
             f"{side}: pos_res={arm.position_residual:.4f} m, "
             f"rot_res={np.degrees(arm.orientation_residual):.1f} deg{flag}"
         )
     out = OUTPUTS / f"render_{frame:05d}.png"
-    _save_rgba(out, rgba)
+    _save_rgba(out, result.rgba)
     print(f"wrote {out}")
 
 
@@ -241,15 +259,18 @@ def render(
 def overlay(
     frame: int = typer.Option(..., help="Frame index."),
     repo_id: str = typer.Option(DATASET_REPO_ID, help="LeRobot dataset repo id."),
+    cpu: bool = typer.Option(False, help="Use the CPU fallback (ARKit pose + KMeans grasp)."),
+    gripper_config: str = typer.Option("", help="GraspGen gripper YAML (GPU default)."),
 ) -> None:
     """Composite the robot render over the original egocentric frame."""
     from . import dataset as ds
+    from . import pipeline
     from .stages import overlay as overlay_stage
 
     dataset = ds.load_dataset(repo_id)
     sample = ds.get_frame(dataset, frame)
-    _, _, rgba = _retarget_frame(sample)
-    composited = overlay_stage.overlay(sample["rgb"], rgba)
+    result = pipeline.retarget_frame(sample, backends=_backends(cpu, gripper_config))
+    composited = overlay_stage.overlay(sample["rgb"], result.rgba)
     out = OUTPUTS / f"overlay_{frame:05d}.png"
     _save_rgb(out, composited)
     print(f"wrote {out}")
@@ -259,24 +280,28 @@ def overlay(
 def run(
     frame: int = typer.Option(0, help="Frame index."),
     repo_id: str = typer.Option(DATASET_REPO_ID, help="LeRobot dataset repo id."),
+    cpu: bool = typer.Option(False, help="Use the CPU fallback (ARKit pose + KMeans grasp)."),
+    gripper_config: str = typer.Option("", help="GraspGen gripper YAML (GPU default)."),
 ) -> None:
-    """Chain the available CPU stages end-to-end (GPU stages are skipped with a notice)."""
+    """Chain the stages end-to-end (GPU by default; --cpu for the ARKit + KMeans fallback)."""
     from . import dataset as ds
+    from . import pipeline
     from .stages import overlay as overlay_stage
 
-    print("Skipping GPU stages (object: SAM-3D, hand: HAMER, grasp: GraspGen). See AGENTS.md.")
+    backends = _backends(cpu, gripper_config)
     dataset = ds.load_dataset(repo_id)
     sample = ds.get_frame(dataset, frame)
-    print(f"loaded frame {frame} (intrinsics: {sample['intrinsics_src']})")
+    mode = "CPU (ARKit + KMeans)" if cpu else "GPU (HAMER + SAM2 + SAM-3D + GraspGen)"
+    print(f"loaded frame {frame} (intrinsics: {sample['intrinsics_src']}); pipeline: {mode}")
 
-    _, result, rgba = _retarget_frame(sample)
-    for side, arm in result.arms.items():
+    result = pipeline.retarget_frame(sample, backends=backends)
+    for side, arm in result.ik.arms.items():
         flag = "" if arm.reachable else "  [clamped]"
         print(f"IK {side}: pos_res={arm.position_residual:.4f} m{flag}")
 
-    composited = overlay_stage.overlay(sample["rgb"], rgba)
+    composited = overlay_stage.overlay(sample["rgb"], result.rgba)
     OUTPUTS.mkdir(parents=True, exist_ok=True)
-    _save_rgba(OUTPUTS / f"render_{frame:05d}.png", rgba)
+    _save_rgba(OUTPUTS / f"render_{frame:05d}.png", result.rgba)
     out = OUTPUTS / f"overlay_{frame:05d}.png"
     _save_rgb(out, composited)
     print(f"wrote {out}")

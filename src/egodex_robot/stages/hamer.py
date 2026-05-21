@@ -1,20 +1,21 @@
-"""Optional hand-mesh reconstruction from RGB via HAMER.
+"""Hand-mesh reconstruction from RGB via HAMER (GPU).
 
 https://github.com/geopavlakos/hamer
 
-OPTIONAL, RGB-only alternative to the dataset's ARKit hand annotations (see ../pose.py),
-useful when ground-truth pose is unavailable or for comparison. HAMER needs a GPU and its
-own environment + weights (plus a detectron2 ViTDet detector and ViTPose); everything is
-import-gated so importing this module never breaks the CPU-only stages.
+RGB-only hand pose, used as the default hand backend (and an alternative to the dataset's
+ARKit annotations; see ../pose.py). First-class GPU stage: ``torch`` / ``hamer.*`` /
+``vitpose_model`` / detectron2 are imported at module top, so importing this module requires
+the ``hamer`` extra plus its weights. It is only imported when the HAMER backend is selected,
+so the CPU stages stay torch-free.
 
 Contract:
     input  -> RGB frame (H, W, 3), uint8
     output -> {"left"/"right": {vertices (778,3), faces (F,3), keypoints (21,3)}} in the
               HAMER camera frame (metric, +x right / +y down / +z forward). Lift to the
-              world/ARKit frame with the dataset extrinsics if you need to mix with the
+              world/ARKit frame with the dataset extrinsics (see pipeline.py) to mix with the
               ARKit pose path.
 
-Environment (do NOT add to the core env; see AGENTS.md):
+Environment (its own venv -- conflicting CUDA pins with SAM-3D/GraspGen; see AGENTS.md):
     git clone https://github.com/geopavlakos/hamer && cd hamer
     pip install -e .[all] && pip install -v -e third-party/ViTPose
     bash fetch_demo_data.sh        # downloads checkpoints into _DATA/
@@ -25,35 +26,30 @@ HAMER model. It is GPU-only and cannot be exercised in the CPU sandbox where it 
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import hamer as _hamer_pkg
 import numpy as np
+import torch
+from detectron2.config import LazyConfig
+from hamer.configs import CACHE_DIR_HAMER
+from hamer.datasets.vitdet_dataset import ViTDetDataset
+from hamer.models import DEFAULT_CHECKPOINT, download_models, load_hamer
+from hamer.utils import recursive_to
+from hamer.utils.utils_detectron2 import DefaultPredictor_Lazy
+from vitpose_model import ViTPoseModel
 
-_SETUP_HINT = (
-    "HAMER is not available. Set up its GPU environment (clone geopavlakos/hamer, "
-    "pip install -e .[all], install third-party/ViTPose, run fetch_demo_data.sh), "
-    "or use the dataset's ARKit hand annotations via pose.decode_state(). See AGENTS.md."
-)
+from .. import pose
 
 
 def _load_models(device: str):
     """Load the HAMER model + ViTDet detector + ViTPose, following hamer/demo.py."""
-    from pathlib import Path
-
-    import torch
-    from hamer.configs import CACHE_DIR_HAMER
-    from hamer.models import DEFAULT_CHECKPOINT, download_models, load_hamer
-    from hamer.utils.utils_detectron2 import DefaultPredictor_Lazy
-    from vitpose_model import ViTPoseModel
-
     download_models(CACHE_DIR_HAMER)
     model, model_cfg = load_hamer(DEFAULT_CHECKPOINT)
     model = model.to(device).eval()
 
-    import hamer
-    from detectron2.config import LazyConfig
-
-    cfg_path = Path(hamer.__file__).parent / "configs" / "cascade_mask_rcnn_vitdet_h_75ep.py"
+    cfg_path = Path(_hamer_pkg.__file__).parent / "configs" / "cascade_mask_rcnn_vitdet_h_75ep.py"
     detectron2_cfg = LazyConfig.load(str(cfg_path))
     detectron2_cfg.train.init_checkpoint = (
         "https://dl.fbaipublicfiles.com/detectron2/ViTDet/COCO/cascade_mask_rcnn_vitdet_h/"
@@ -97,13 +93,6 @@ def _detect_hand_boxes(rgb: np.ndarray, detector: Any, cpm: Any) -> tuple[np.nda
 
 def reconstruct_hands(rgb: np.ndarray, device: str | None = None) -> dict[str, Any]:
     """Return per-hand {vertices, faces, keypoints} in the HAMER camera frame. Requires GPU."""
-    try:
-        import torch
-        from hamer.datasets.vitdet_dataset import ViTDetDataset
-        from hamer.utils import recursive_to
-    except ImportError as exc:  # pragma: no cover - GPU env only
-        raise NotImplementedError(_SETUP_HINT) from exc
-
     rgb = np.asarray(rgb)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model, model_cfg, detector, cpm = _load_models(device)
@@ -137,3 +126,28 @@ def reconstruct_hands(rgb: np.ndarray, device: str | None = None) -> dict[str, A
                 "keypoints": k + cam_t[n],
             }
     return hands
+
+
+# HAMER pred_keypoints_3d use the 21-joint hand order (wrist, then thumb..pinky x4, tip last
+# per finger). Indices below assume that ordering and should be validated against the repo.
+_TIP_IDX = [4, 8, 12, 16, 20]    # thumb, index, middle, ring, pinky tips
+_WRIST_IDX = 0
+_INDEX_MCP, _PINKY_MCP, _MIDDLE_MCP = 5, 17, 9
+
+
+def hamer_to_handpose(recon_side: dict[str, Any]) -> "pose.HandPose":
+    """Convert one HAMER hand ({keypoints (21,3), ...}) to a pose.HandPose (camera frame).
+
+    Wrist position is keypoint 0; the wrist frame is built so x points along the hand
+    (wrist->middle MCP, the gripper "approach") and y spans the palm (index MCP->pinky MCP,
+    the "closing" axis) -- matching grasp.py's gripper convention so select_grasp can compare
+    the wrist pose to grasp candidates directly. ``keypoints`` are the five fingertips.
+    """
+    from .grasp import _orthonormal_frame
+
+    kp = np.asarray(recon_side["keypoints"], dtype=float).reshape(-1, 3)
+    wrist = kp[_WRIST_IDX]
+    approach = kp[_MIDDLE_MCP] - wrist
+    across = kp[_PINKY_MCP] - kp[_INDEX_MCP]
+    rotation = _orthonormal_frame(approach, across)
+    return pose.HandPose(wrist_position=wrist, wrist_rotation=rotation, keypoints=kp[_TIP_IDX])

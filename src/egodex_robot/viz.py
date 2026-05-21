@@ -25,9 +25,8 @@ from typing import Any
 
 import numpy as np
 
-from . import geometry, pose
-from .ik import EE_FRAMES, RobotIK
-from .stages import grasp as grasp_stage
+from . import pose
+from .ik import RobotIK
 from .stages import overlay as overlay_stage
 from .stages import render as render_stage
 
@@ -120,18 +119,37 @@ def log_hands(hands: dict[str, pose.HandPose]) -> None:
         rr.log(f"{SCENE_3D}/hand/{side}", rr.Points3D(pts, colors=colors.get(side), radii=0.008))
 
 
-def log_episode(dataset: Any, episode: int = 0, recording_name: str = "egodex") -> None:
+def log_object(object_mesh: dict[str, Any]) -> None:
+    """Log the SAM-3D object mesh (already in world frame) into the 3D panel."""
+    import rerun as rr
+
+    verts = np.asarray(object_mesh["vertices"], dtype=np.float32)
+    faces = object_mesh.get("faces")
+    if faces is not None:
+        rr.log(
+            f"{SCENE_3D}/object",
+            rr.Mesh3D(vertex_positions=verts, triangle_indices=np.asarray(faces, dtype=np.uint32)),
+        )
+    else:
+        rr.log(f"{SCENE_3D}/object", rr.Points3D(verts, radii=0.003))
+
+
+def log_episode(
+    dataset: Any, episode: int = 0, recording_name: str = "egodex", backends: Any | None = None
+) -> None:
     """Stream one episode into the three-panel layout.
 
-    Per frame: decode the ARKit hand pose, place the robot base relative to the camera,
-    solve IK for both follower arms, render the robot through the camera, overlay it on the
-    RGB, and log original RGB (ORIGINAL_2D), the overlay (EDITED_2D) and the 3D scene
-    (camera + hands + posed robot) on the shared dataset timeline.
+    Per frame: run the shared retarget pipeline (``pipeline.retarget_frame`` -- GPU chain by
+    default, or the CPU fallback when ``backends`` is ``Backends.cpu()``), then log original
+    RGB (ORIGINAL_2D), the overlay (EDITED_2D), and the 3D scene (camera + hand keypoints +
+    posed robot + object mesh) on the shared dataset timeline. The robot is posed from the
+    pipeline's placo FK link transforms -- the same transforms that produced the overlay.
 
-    Requires a loaded ``LeRobotDataset`` (so HF + lerobot must be available).
+    Requires a loaded ``LeRobotDataset`` (HF + lerobot) and, by default, the GPU stage envs.
     """
     import rerun as rr
 
+    from . import pipeline
     from .dataset import iter_episode_frames
 
     rr.init(recording_name, spawn=True)
@@ -145,25 +163,13 @@ def log_episode(dataset: Any, episode: int = 0, recording_name: str = "egodex") 
         rr.set_time(_TIMELINE, sequence=frame_index)
         rgb = frame["rgb"]
         height, width = rgb.shape[:2]
-        intrinsics = frame["intrinsics"]
-        extrinsics = frame["extrinsics"]
 
         rr.log(ORIGINAL_2D, rr.Image(rgb))
-        log_camera(intrinsics, extrinsics, width, height)
+        log_camera(frame["intrinsics"], frame["extrinsics"], width, height)
 
-        hands = pose.decode_state(frame["observation.state"])
-        log_hands(hands)
-
-        base = geometry.robot_base_from_camera(extrinsics)
-        targets = {
-            side: grasp_stage.grasp_from_contacts(pose.contact_points(hands[side])).as_se3()
-            for side in EE_FRAMES
-            if side in hands
-        }
-        result = ik.solve(targets, base_transform=base)
-        log_robot_pose(visuals, result.link_transforms)
-
-        robot_rgba = render_stage.render_robot(
-            result.link_transforms, intrinsics, extrinsics, (width, height), ik.urdf_path
-        )
-        rr.log(EDITED_2D, rr.Image(overlay_stage.overlay(rgb, robot_rgba)))
+        result = pipeline.retarget_frame(frame, backends=backends, ik=ik)
+        log_hands(result.hands)
+        log_robot_pose(visuals, result.ik.link_transforms)
+        if result.object_mesh is not None:
+            log_object(result.object_mesh)
+        rr.log(EDITED_2D, rr.Image(overlay_stage.overlay(rgb, result.rgba)))

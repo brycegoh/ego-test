@@ -106,6 +106,23 @@ def robot_base_from_camera(
     return np.asarray(extrinsics, dtype=float) @ offset
 
 
+def cv_camera_points_to_world(points_cv: np.ndarray, extrinsics: np.ndarray) -> np.ndarray:
+    """Lift (N, 3) CV-camera-frame points (+z forward) into the world frame.
+
+    HAMER and SAM-3D emit geometry in a CV camera frame; this flips to the ARKit/GL camera
+    convention and applies ``T_world_cam`` (``extrinsics``).
+    """
+    gl = np.asarray(points_cv, dtype=float).reshape(-1, 3) @ GL_CV_FLIP.T
+    return transform_points(gl, extrinsics)
+
+
+def cv_camera_pose_to_world(pose_cv: np.ndarray, extrinsics: np.ndarray) -> np.ndarray:
+    """Lift a 4x4 pose expressed in the CV camera frame into the world frame."""
+    flip = np.eye(4)
+    flip[:3, :3] = GL_CV_FLIP
+    return np.asarray(extrinsics, dtype=float) @ flip @ np.asarray(pose_cv, dtype=float)
+
+
 def rotation_geodesic(rot_a: np.ndarray, rot_b: np.ndarray) -> float:
     """Geodesic angle (radians) between two rotation matrices."""
     rel = np.asarray(rot_a, dtype=float).T @ np.asarray(rot_b, dtype=float)

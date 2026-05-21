@@ -66,16 +66,16 @@ Challenges:
 ```
 
 Design decisions:
-- **Hand pose** comes from the dataset's **ARKit 3D annotations** by default (accurate and
-  already present). [HAMER](https://github.com/geopavlakos/hamer) is an optional RGB-only
-  alternative / comparison.
-- **Object** is reconstructed with
-  [SAM-3D-Objects](https://github.com/facebookresearch/sam-3d-objects).
-- **Grasp** is generated with [GraspGen](https://github.com/NVlabs/GraspGen) (preferred);
+- **Hand pose** comes from [HAMER](https://github.com/geopavlakos/hamer) (RGB) by default;
+  the dataset's **ARKit 3D annotations** (accurate, already present) are the no-GPU fallback.
+- **Object** is masked with [SAM 2](https://github.com/facebookresearch/sam2) and
+  reconstructed with [SAM-3D-Objects](https://github.com/facebookresearch/sam-3d-objects).
+- **Grasp** is generated with [GraspGen](https://github.com/NVlabs/GraspGen) (default);
   a KMeans(2) clustering of fingertip/contact points into the two gripper jaws is the
   no-GPU fallback.
-- **Render** uses [rerun](https://rerun.io)'s built-in URDF loader with the **Mobile
-  ALOHA** description from
+- **Render** uses [pyrender](https://github.com/mmatl/pyrender) to rasterise the placo-posed
+  **Mobile ALOHA** URDF through the egocentric camera; [rerun](https://rerun.io) displays the
+  result. URDF from
   [agilexrobotics/mobile_aloha_sim](https://github.com/agilexrobotics/mobile_aloha_sim)
   (a ready-made flat URDF — no xacro needed — fetched by `scripts/fetch_urdf.sh`).
 
@@ -101,23 +101,31 @@ panels (sharing the dataset timeline so scrubbing stays in sync):
 ## Commands (intended UX)
 
 ```bash
-uv sync                          # install the core CPU env
+uv sync                          # install the core env
 bash scripts/fetch_urdf.sh       # fetch the Mobile ALOHA URDF + meshes into assets/urdf/
 export ROS_PACKAGE_PATH="$PWD/assets/urdf"   # so rerun resolves package:// mesh refs
 
 uv run egodex load               # download + inspect the dataset, dump a sample frame
-uv run egodex viz                # rerun: 3D scene | edited video | original video
-uv run egodex hand   --frame 0   # hand pose (ARKit annotations / HAMER)
-uv run egodex object --frame 0   # object 3D reconstruction (SAM-3D)        [GPU]
-uv run egodex grasp  --frame 0   # parallel-gripper grasp (GraspGen / KMeans)
-uv run egodex render --frame 0   # pose Mobile ALOHA URDF + snapshot
-uv run egodex overlay --frame 0  # composite robot over the original frame
-uv run egodex run    --frame 0   # chain the available stages
+uv run egodex viz   --cpu        # rerun: 3D scene | edited video | original video
+uv run egodex hand   --frame 0 --arkit   # hand pose (HAMER default; --arkit for annotations)
+uv run egodex grasp  --frame 0 --kmeans  # grasp (GraspGen default; --kmeans CPU fallback)
+uv run egodex render --frame 0 --cpu     # IK the arms + render through the camera
+uv run egodex overlay --frame 0 --cpu    # composite robot over the original frame
+uv run egodex run    --frame 0 --cpu     # chain the stages end-to-end
 ```
 
-CPU-only stages: `load`, `viz`, `grasp` (KMeans fallback), `render`, `overlay`.
-GPU + separate environment + weights: `object`, `hand` (HAMER), `grasp` (GraspGen).
-See [AGENTS.md](AGENTS.md) for environment setup.
+The pipeline runs the **full GPU chain by default** (HAMER → SAM 2 → SAM-3D → GraspGen);
+drop the `--cpu` / `--arkit` / `--kmeans` flags above and pass `--gripper-config <yaml>` to
+use it. GPU stages install as per-stage extras into **separate** environments (conflicting
+CUDA pins):
+
+```bash
+pip install '.[hamer]'     # or '.[sam2]' / '.[sam3d]' / '.[graspgen]' -- one env each
+uv run egodex object --frame 0                       # SAM 2 mask -> SAM-3D mesh   [GPU]
+uv run egodex run    --frame 0 --gripper-config graspgen_robotiq_2f_140.yml   [GPU]
+```
+
+See [AGENTS.md](AGENTS.md) for environment setup and the per-stage caveats.
 
 ## Existing literature
 
