@@ -111,16 +111,31 @@ def viz(
 def hand(
     frame: int = typer.Option(..., help="Frame index."),
     repo_id: str = typer.Option(DATASET_REPO_ID, help="LeRobot dataset repo id."),
+    hamer: bool = typer.Option(False, help="Use HAMER (RGB, GPU) instead of ARKit annotations."),
 ) -> None:
-    """Decode the ARKit hand pose (wrist + fingertips) for a frame."""
+    """Decode the hand pose for a frame (ARKit annotations by default; HAMER with --hamer [GPU])."""
     from . import dataset as ds
     from . import pose
 
     dataset = ds.load_dataset(repo_id)
     sample = ds.get_frame(dataset, frame)
-    hands = pose.decode_state(sample["observation.state"])
     OUTPUTS.mkdir(parents=True, exist_ok=True)
     out = OUTPUTS / f"hand_{frame:05d}.npz"
+
+    if hamer:
+        from .stages.hamer import reconstruct_hands  # GPU + weights; see AGENTS.md
+
+        recon = reconstruct_hands(sample["rgb"])
+        np.savez(
+            out,
+            **{f"{side}_{field}": data[field] for side, data in recon.items() for field in data},
+        )
+        for side, data in recon.items():
+            print(f"{side}: {len(data['vertices'])} verts, {len(data['keypoints'])} keypoints (HAMER)")
+        print(f"wrote {out}")
+        return
+
+    hands = pose.decode_state(sample["observation.state"])
     np.savez(
         out,
         **{
@@ -135,17 +150,37 @@ def hand(
 
 
 @app.command()
-def object(frame: int = typer.Option(..., help="Frame index.")) -> None:
+def object(
+    frame: int = typer.Option(..., help="Frame index."),
+    repo_id: str = typer.Option(DATASET_REPO_ID, help="LeRobot dataset repo id."),
+    mask: str = typer.Option("", help="Path to a binary object mask PNG (from SAM/SAM2)."),
+    config: str = typer.Option("checkpoints/hf/pipeline.yaml", help="SAM-3D pipeline config."),
+) -> None:
     """Reconstruct the manipulated object's 3D mesh from RGB (SAM-3D-Objects). [GPU]"""
+    from . import dataset as ds
     from .stages.sam3d import reconstruct_object
 
-    reconstruct_object(np.empty(0))  # raises NotImplementedError with setup pointer
+    dataset = ds.load_dataset(repo_id)
+    sample = ds.get_frame(dataset, frame)
+    mask_arr = None
+    if mask:
+        import cv2
+
+        mask_arr = cv2.imread(mask, cv2.IMREAD_GRAYSCALE)
+    recon = reconstruct_object(sample["rgb"], mask=mask_arr, config_path=config)
+    OUTPUTS.mkdir(parents=True, exist_ok=True)
+    out = OUTPUTS / f"object_{frame:05d}.npz"
+    np.savez(out, vertices=recon["vertices"], faces=recon["faces"], pose=recon["pose"])
+    print(f"object: {len(recon['vertices'])} verts; wrote {out}")
 
 
 @app.command()
 def grasp(
     frame: int = typer.Option(..., help="Frame index."),
     repo_id: str = typer.Option(DATASET_REPO_ID, help="LeRobot dataset repo id."),
+    graspgen: bool = typer.Option(False, help="Use GraspGen (GPU) on a reconstructed object mesh."),
+    gripper_config: str = typer.Option("", help="GraspGen gripper YAML (required with --graspgen)."),
+    object_npz: str = typer.Option("", help="Object mesh artifact from `egodex object` (--graspgen)."),
 ) -> None:
     """Generate a parallel-gripper grasp (KMeans(2) over ARKit fingertips; GraspGen [GPU])."""
     from . import dataset as ds
@@ -158,12 +193,24 @@ def grasp(
     OUTPUTS.mkdir(parents=True, exist_ok=True)
     out = OUTPUTS / f"grasp_{frame:05d}.npz"
     payload = {}
-    for side, h in hands.items():
-        g = grasp_stage.grasp_from_contacts(pose.contact_points(h))
-        payload[f"{side}_position"] = g.position
-        payload[f"{side}_rotation"] = g.rotation
-        payload[f"{side}_width"] = np.array([g.width])
-        print(f"{side}: center {np.round(g.position, 3)}, width {g.width:.3f} m")
+
+    if graspgen:
+        loaded = np.load(object_npz, allow_pickle=True)
+        object_mesh = {"vertices": loaded["vertices"], "faces": loaded["faces"], "pose": loaded["pose"]}
+        # Select per hand against that hand's wrist pose (must share the object's frame).
+        for side, h in hands.items():
+            g = grasp_stage.grasp_from_graspgen(object_mesh, hand_pose=h, gripper_config=gripper_config)
+            payload[f"{side}_position"] = g.position
+            payload[f"{side}_rotation"] = g.rotation
+            payload[f"{side}_width"] = np.array([g.width])
+            print(f"{side}: GraspGen center {np.round(g.position, 3)}, width {g.width:.3f} m")
+    else:
+        for side, h in hands.items():
+            g = grasp_stage.grasp_from_contacts(pose.contact_points(h))
+            payload[f"{side}_position"] = g.position
+            payload[f"{side}_rotation"] = g.rotation
+            payload[f"{side}_width"] = np.array([g.width])
+            print(f"{side}: center {np.round(g.position, 3)}, width {g.width:.3f} m")
     np.savez(out, **payload)
     print(f"wrote {out}")
 
